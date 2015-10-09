@@ -193,6 +193,12 @@ class ApiConnector:
         body['framework_id']['value'] = fid
         self.post(API_URL, body)
 
+    def close_channel(self):
+        print("Stopping connector thread")
+        self.terminate = True
+        self.framework_id = None
+        self.offers = None
+
         
 class ApiConnectorThread(Thread):
     def __init__(self, connector):
@@ -209,15 +215,13 @@ class ApiConnectorThread(Thread):
         print("Subscribe post request returned: {}".format(ret))
 
         
-    def cancel(self):
+    def close_channel(self):
         print("Stopping connector thread")
-        self.connector.terminate = True
-        self.framework_id = None
-        self.offers = None
-        
-        # Wait a bit...
+        self.connector.close_channel()
+
         time.sleep(5)
         print("Channel was closed: {}".format(self.is_alive()))
+
 
     
 def main():

@@ -35,7 +35,7 @@ class Launcher:
 
         if not self.conn.framework_id:
             print("Failed to register, terminating Framework")
-            self.conn.close_channel()
+            self.background_thread.close_channel()
         else:
             count = 0
             while not self.conn.offers and count < 10:
@@ -46,7 +46,7 @@ class Launcher:
             if not self.conn.offers:
                 print("Failed to obtain resources, terminating Framework")
                 self.conn.terminate_framework(self.conn.framework_id)
-                self.conn.close_channel()
+                self.background_thread.close_channel()
             else:
                 print("Got offers:")
                 pretty.pprint(self.conn.offers)
