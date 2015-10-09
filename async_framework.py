@@ -35,6 +35,7 @@ class Framework(Thread):
         self.daemon = True
         self.inflight = {}
         self.max_inflight = 1
+        self.agent_tasks = {}
 
     def run(self):
         while not self.cancelled:
@@ -49,9 +50,9 @@ class Framework(Thread):
             elif kind == "request":
                 self.handle_request(value)
             elif kind == "offers":
-                pass
+                self.handle_offers(value)
             elif kind == "update":
-                pass
+                self.handle_update(value)
             elif kind == "error":
                 pass
             elif kind == "subscribed":
@@ -80,6 +81,35 @@ class Framework(Thread):
         req_msg = FrameworkRequest(kind, req, reply_channel)
         self.queue.put(FrameworkMessage("request", req_msg))
 
+    def handle_offers(self, req_msg):
+        offers = req_msg["offers"]["offers"]
+        for offer in offers:
+            agent = self.add_offer(offer)
+
+    def add_offer(self, offer):
+        agent_id = offer["agent_id"]["value"]
+        agent = self.get_or_create_agent(agent_id)
+        agent["offer"] = offer
+        print("agent status: {}".format(agent))
+        return agent
+
+    def handle_update(self, req_msg):
+        agent_id = req_msg["update"]["status"]["agent_id"]["value"]
+        self.add_task(agent_id, req_msg)
+
+    def add_task(self, agent_id, req_msg):
+        agent = self.get_or_create_agent(agent_id)
+        agent["task"] = req_msg
+        print("agent status: {}".format(agent))
+        
+    def get_or_create_agent(self, agent_id):
+        agent = {}
+        if agent_id not in self.agent_tasks:
+            self.agent_tasks[agent_id] = agent
+        else:
+            agent = self.agent_tasks[agent_id]
+        return agent
+    
     def handle_request(self, req_msg):
         print("request {}".format(req_msg))
         if len(self.inflight) == self.max_inflight:
