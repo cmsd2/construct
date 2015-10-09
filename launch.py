@@ -5,6 +5,8 @@ import pprint
 import requests
 
 from construct import ApiConnector, get_json
+from async_framework import Framework
+from Queue import Queue
 
 
 pretty = pprint.PrettyPrinter(indent=2)
@@ -24,7 +26,9 @@ class Launcher:
     def connect(self):
         r = requests.get("{}/state.json".format(self.master_url))
         self.conn = ApiConnector()
-        self.background_thread = self.conn.register_framework()
+        #self.background_thread = self.conn.register_framework()
+        self.framework = Framework(self.conn, self.api_url)
+        self.framework.start()
 
     def wait_for_offers(self):
         count = 0
@@ -72,16 +76,10 @@ class Launcher:
             task_infos["agent_id"]["value"] = self.conn.offers.get('offers')[0]["agent_id"]["value"]
             task_infos["resources"] = get_json(TASK_RESOURCES_JSON)
 
-
-            try:
-                r = self.conn.post(self.api_url, launch_json)
-                print("Result: {}".format(r.status_code))
-                if r.text:
-                    print(r.text)
-                if 200 <= r.status_code < 300:
-                    print("Successfully launched task {} on Agent [{}]".format(task_id, self.conn.offers.get('offers')[0]["agent_id"]["value"]))
-            except ValueError, err:
-                print("Request failed: {}".format(err))
+            q = Queue(1)
+            self.framework.request("launch", launch_json, q)
+            r = q.get()
+            print("reply: {}".format(r))
 
 
 def main():

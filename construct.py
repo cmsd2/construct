@@ -8,6 +8,7 @@ import requests
 import sh
 import time
 from threading import Thread
+from async_framework import FrameworkMessage
 
 # See KillTaskMessage in include/mesos/v1/scheduler/scheduler.proto
 SUBSCRIBE_BODY = {
@@ -87,28 +88,39 @@ class ApiConnector:
         self.offers = []
         self.framework_id = None
         self.last_heartbeat = None
+        self.tasks = {}
 
     def get_offers(self):
         return self.offers
 
-    def handle_heartbeat(self, body):
+    def handle_heartbeat(self, body, queue):
         print("[HEARTBEAT] {}".format(body))
         self.last_heartbeat = time.ctime()
+        queue.put(FrameworkMessage("heartbeat", body))
 
-    def handle_error(self, body):
+    def handle_error(self, body, queue):
         print("[ERROR] {}".format(body))
+        queue.put(FrameworkMessage("error", body))
 
-    def handle_offers(self, body):
+    def handle_offers(self, body, queue):
         print("[OFFERS] {}".format(body))
         self.offers = body.get("offers")
+        queue.put(FrameworkMessage("offers", body))
 
-    def handle_subscribed(self, url, body):
+    def handle_update(self, body, queue):
+        print("[UPDATE] {}".format(body))
+        task_id = body["update"]["status"]["task_id"]["value"]
+        self.tasks[task_id] = body
+        queue.put(FrameworkMessage("update", body))
+        
+    def handle_subscribed(self, url, body, queue):
         framework_id = body.get("subscribed").get("framework_id").get("value")
         self.framework_id = framework_id
         if framework_id:
             print("Framework {} registered with Master at ({})".format(framework_id, url))
-                            
-    def post(self, url, body, **kwargs):
+        queue.put(FrameworkMessage("subscribed", body))
+
+    def post(self, url, body, queue, **kwargs):
         """ POST `body` to the given `url`.
         
         @return: the Response from the server.
@@ -130,18 +142,24 @@ class ApiConnector:
                     continue
                 body = json.loads(line[:count_bytes])
                 count_bytes = int(line[count_bytes:])
-                if body.get("type") == "HEARTBEAT":
-                    self.handle_heartbeat(body)
-                if body.get("type") == "ERROR":
-                    self.handle_error(body)
+                body_type = body.get("type")
+                if body_type == "HEARTBEAT":
+                    self.handle_heartbeat(body, queue)
+                elif body_type == "ERROR":
+                    self.handle_error(body, queue)
                 # When we get OFFERS we want to see them (and eventually, use them)
-                if body.get("type") == "OFFERS":
-                    self.handle_offers(body)
+                elif body_type == "OFFERS":
+                    self.handle_offers(body, queue)
                 # We need to capture the framework_id to use in subsequent requests.
-                if body.get("type") == "SUBSCRIBED":
-                    self.handle_subscribed(url, body)
-                if self.terminate:
+                elif body_type == "SUBSCRIBED":
+                    self.handle_subscribed(url, body, queue)
+                elif body_type == "UPDATE":
+                    self.handle_update(body, queue)
+                elif self.terminate:
                     return
+                else:
+                    print("unrecognised message: {}".format(body))
+                    queue.put(FrameworkMessage("unknown", body))
         return r
 
     def get_framework(self, index=None, id=None):
@@ -171,10 +189,10 @@ class ApiConnector:
                         return framework
 
 
-    def register_framework(self):
+    def register_framework(self, queue):
         channel = None
         try:
-            channel = ApiConnectorThread(self)
+            channel = ApiConnectorThread(self, queue)
             channel.start()
             print("The background channel was started to {}".format(API_URL))
         except Exception, ex:
@@ -191,7 +209,7 @@ class ApiConnector:
                 print("No frameworks to terminate")
         body = TEARDOWN_BODY
         body['framework_id']['value'] = fid
-        self.post(API_URL, body)
+        self.post(API_URL, body, None)
 
     def close_channel(self):
         print("Stopping connector thread")
@@ -201,17 +219,18 @@ class ApiConnector:
 
         
 class ApiConnectorThread(Thread):
-    def __init__(self, connector):
+    def __init__(self, connector, queue):
         super(ApiConnectorThread, self).__init__()
         self.connector = connector
         self.daemon = True
         self.timeout = 30
+        self.queue = queue
 
         
     def run(self):
         """Subscribe to mesos events and handle offers"""
         kwargs = {'stream':True, 'timeout':self.timeout}
-        ret = self.connector.post(API_URL, SUBSCRIBE_BODY, **kwargs)
+        ret = self.connector.post(API_URL, SUBSCRIBE_BODY, self.queue, **kwargs)
         print("Subscribe post request returned: {}".format(ret))
 
         

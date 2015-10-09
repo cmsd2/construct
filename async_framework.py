@@ -1,5 +1,6 @@
 import itertools
 from Queue import Queue
+from threading import Thread
 
 framework_req_id = itertools.count()
 
@@ -8,22 +9,28 @@ class FrameworkMessage:
         self.kind = kind
         self.value = value
 
+    def __str__(self):
+        return "msg(kind: {}, value: {})".format(self.kind, self.value)
+
 class FrameworkRequest:
-    def __init__(self, body):
+    def __init__(self, kind, body, reply_channel=None):
         global framework_req_id
         self.id = framework_req_id.next()
+        self.kind = kind
         self.body = body
+        self.reply_channel = reply_channel
 
     def __str__(self):
         return "request(id: {}, body: {})".format(self.id, self.body)
 
 class Framework(Thread):
-    def __init__(self, connector):
+    def __init__(self, connector, api_url):
         super(Framework, self).__init__()
+        self.api_url = api_url
         self.cancelled = False
-        self.connector = connector
-        self.connector_thread = connector.register_framework()
         self.queue = Queue()
+        self.connector = connector
+        self.connector_thread = connector.register_framework(self.queue)
         self.pending = []
         self.daemon = True
         self.inflight = {}
@@ -41,6 +48,16 @@ class Framework(Thread):
                 self.handle_response(value)
             elif kind == "request":
                 self.handle_request(value)
+            elif kind == "offers":
+                pass
+            elif kind == "update":
+                pass
+            elif kind == "error":
+                pass
+            elif kind == "subscribed":
+                pass
+            elif kind == "heartbeat":
+                pass
             else:
                 print("unknown message type {}".format(kind))
         print("framework thread exiting")
@@ -59,20 +76,52 @@ class Framework(Thread):
     def response(self, resp):
         self.queue.put(FrameworkMessage("response", resp))
 
-    def request(self, req):
-        req_msg = FrameworkRequest(req)
+    def request(self, kind, req, reply_channel=None):
+        req_msg = FrameworkRequest(kind, req, reply_channel)
         self.queue.put(FrameworkMessage("request", req_msg))
 
     def handle_request(self, req_msg):
         print("request {}".format(req_msg))
         if len(self.inflight) == self.max_inflight:
+            print("{} requests already in flight. enqueing to pending".format(self.max_inflight))
             self.pending.append(FrameworkMessage("request", req_msg))
         else:
+            print("dispatching request now")
             self.exec_request(req_msg)
 
     def handle_response(self, resp):
         print("response {}".format(resp))
 
     def exec_request(self, req_msg):
-        self.inflight[req_msg.id] = req_msg
-        pass
+        try:
+            if req_msg.kind == "launch":
+                self.post_async(req_msg)                
+            else:
+                print("unsupported request type {}".format(req_msg.kind))
+        except ValueError, err:
+            print("Request failed: {}".format(err))
+            if req_msg.reply_channel is not None:
+                req_msg.reply_channel.put(err)
+                
+
+    def post_async(self, req_msg):
+        r = self.post(req_msg)
+        if 200 <= r.status_code < 300:
+            self.inflight[req_msg.id] = req_msg
+        elif req_msg.reply_channel is not None:
+            print("returning failed async request result")
+            req_msg.put(r)
+        else:
+            print("no reply channel for async request in flight")
+        return r
+
+    def post(self, req_msg):
+        r = self.connector.post(self.api_url, req_msg.body, self.queue)
+        print("Result: {}".format(r.status_code))
+        if r.text:
+            print(r.text)
+        if 200 <= r.status_code < 300:
+            print("Successfully posted")
+        return r
+        
+
