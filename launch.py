@@ -28,6 +28,7 @@ class Launcher:
 
     def wait_for_offers(self):
         count = 0
+        result = False
         while not self.conn.framework_id and count < 10:
             sleep(3)
             print('.')
@@ -50,6 +51,8 @@ class Launcher:
             else:
                 print("Got offers:")
                 pretty.pprint(self.conn.offers)
+                result = True
+        return result
 
     def launch(self):
         for i in range(0, len(self.conn.offers)):
@@ -84,8 +87,8 @@ class Launcher:
 def main():
     launcher = Launcher("http://192.168.33.10:5050")
     launcher.connect()
-    launcher.wait_for_offers()
-    launcher.launch()
+    if launcher.wait_for_offers():
+        launcher.launch()
     launcher.background_thread.join()
 
 if __name__ == '__main__':
